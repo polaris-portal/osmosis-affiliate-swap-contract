@@ -1,5 +1,5 @@
 use cosmwasm_std::testing::{mock_dependencies, mock_env, mock_info};
-use cosmwasm_std::{from_binary, Coin, Uint128};
+use cosmwasm_std::{from_json, Coin, Uint128};
 
 use crate::contract::{execute, instantiate, query, reply};
 use crate::execute::SWAP_REPLY_ID;
@@ -8,9 +8,13 @@ use osmosis_std::types::osmosis::poolmanager::v1beta1::{
     MsgSplitRouteSwapExactAmountInResponse, MsgSwapExactAmountInResponse, SwapAmountInRoute,
     SwapAmountInSplitRoute,
 };
-use prost::Message as _;
 
-fn mock_instantiate(deps: &mut cosmwasm_std::OwnedDeps<_, _, _>) {
+fn mock_instantiate<S, A, Q>(deps: &mut cosmwasm_std::OwnedDeps<S, A, Q>)
+where
+    S: cosmwasm_std::Storage,
+    A: cosmwasm_std::Api,
+    Q: cosmwasm_std::Querier,
+{
     let msg = InstantiateMsg {
         owner: "owner".to_string(),
         affiliate_addr: "affiliate".to_string(),
@@ -25,7 +29,7 @@ fn test_config_query() {
     let mut deps = mock_dependencies();
     mock_instantiate(&mut deps);
     let bin = query(deps.as_ref(), mock_env(), QueryMsg::Config {}).unwrap();
-    let resp: crate::msg::ConfigResponse = from_binary(&bin).unwrap();
+    let resp: crate::msg::ConfigResponse = from_json(&bin).unwrap();
     assert_eq!(resp.affiliate_bps, 250);
 }
 
@@ -48,7 +52,7 @@ fn test_proxy_single() {
     let info = mock_info("trader", &[Coin::new(1000, "uion")]);
     let resp = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
     assert_eq!(resp.messages.len(), 1);
-    assert_eq!(resp.messages[0].id, Some(SWAP_REPLY_ID));
+    assert_eq!(resp.messages[0].id, SWAP_REPLY_ID);
 
     let resp_msg = MsgSwapExactAmountInResponse {
         token_out_amount: "1000".to_string(),
@@ -88,7 +92,7 @@ fn test_proxy_split() {
     let info = mock_info("trader", &[Coin::new(1000, "uion")]);
     let resp = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
     assert_eq!(resp.messages.len(), 1);
-    assert_eq!(resp.messages[0].id, Some(SWAP_REPLY_ID));
+    assert_eq!(resp.messages[0].id, SWAP_REPLY_ID);
 
     let resp_msg = MsgSplitRouteSwapExactAmountInResponse {
         token_out_amount: "1000".to_string(),

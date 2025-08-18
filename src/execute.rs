@@ -1,7 +1,7 @@
 use std::str::FromStr;
 
 use cosmwasm_std::{
-    coins, Addr, BankMsg, Coin, DepsMut, Env, MessageInfo, Reply, Response, SubMsg, SubMsgResponse,
+    coins, Addr, BankMsg, DepsMut, Env, MessageInfo, Reply, Response, SubMsg, SubMsgResponse,
     SubMsgResult, Uint128,
 };
 use osmosis_std::types::osmosis::poolmanager::v1beta1::{
@@ -110,7 +110,9 @@ pub fn proxy_swap_with_fee(
             let mut total_in = Uint128::zero();
             for r in &routes {
                 let amt = Uint128::from_str(&r.token_in_amount)?;
-                total_in = total_in.checked_add(amt)?;
+                total_in = total_in
+                    .checked_add(amt)
+                    .map_err(|e| cosmwasm_std::StdError::generic_err(e.to_string()))?;
             }
             if !info
                 .funds
@@ -176,24 +178,18 @@ pub fn handle_swap_reply(deps: DepsMut, msg: Reply) -> Result<Response, Contract
     let affiliate_amount = amount.multiply_ratio(cfg.affiliate_bps as u128, 10_000u128);
     let user_amount = amount.checked_sub(affiliate_amount).unwrap();
 
-    let mut msgs = vec![];
+    let mut msgs: Vec<cosmwasm_std::CosmosMsg> = vec![];
     if !affiliate_amount.is_zero() {
-        msgs.push(
-            BankMsg::Send {
-                to_address: cfg.affiliate_addr.into_string(),
-                amount: coins(affiliate_amount.u128(), state.token_out_denom.clone()),
-            }
-            .into(),
-        );
+        msgs.push(cosmwasm_std::CosmosMsg::Bank(BankMsg::Send {
+            to_address: cfg.affiliate_addr.into_string(),
+            amount: coins(affiliate_amount.u128(), state.token_out_denom.clone()),
+        }));
     }
     if !user_amount.is_zero() {
-        msgs.push(
-            BankMsg::Send {
-                to_address: state.original_sender.into_string(),
-                amount: coins(user_amount.u128(), state.token_out_denom.clone()),
-            }
-            .into(),
-        );
+        msgs.push(cosmwasm_std::CosmosMsg::Bank(BankMsg::Send {
+            to_address: state.original_sender.to_string(),
+            amount: coins(user_amount.u128(), state.token_out_denom.clone()),
+        }));
     }
 
     let response = SwapResponse {
@@ -205,7 +201,7 @@ pub fn handle_swap_reply(deps: DepsMut, msg: Reply) -> Result<Response, Contract
 
     Ok(Response::new()
         .add_messages(msgs)
-        .set_data(cosmwasm_std::to_binary(&response)?)
+        .set_data(cosmwasm_std::to_json_binary(&response)?)
         .add_attribute("token_out_amount", amount)
         .add_attribute("affiliate_bps", cfg.affiliate_bps.to_string()))
 }

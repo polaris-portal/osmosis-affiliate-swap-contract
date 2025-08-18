@@ -15,8 +15,9 @@ A CosmWasm smart contract for Osmosis that enables affiliate fee collection on s
 ### Instantiate
 
 Fields:
+
 - `owner`: admin address
-- `affiliate_addr`: osmosis address receiving fees  
+- `affiliate_addr`: osmosis address receiving fees
 - `affiliate_bps`: fee in basis points (0-10000)
 
 ### Execute
@@ -24,6 +25,7 @@ Fields:
 **`ProxySwapWithFee { swap }`**
 
 Accepts the exact swap payload you would have sent on-chain and proxies it:
+
 - `SwapExactAmountIn { routes, token_in, token_out_min_amount }`
 - `SplitRouteSwapExactAmountIn { routes, token_in_denom, token_out_min_amount }`
 
@@ -60,7 +62,7 @@ osmosisd tx wasm execute <CONTRACT_ADDR> '{
             "pools": [{"pool_id": 1, "token_out_denom": "uatom"}]
           },
           {
-            "token_in_amount": "400000", 
+            "token_in_amount": "400000",
             "pools": [{"pool_id": 151, "token_out_denom": "uatom"}]
           }
         ],
@@ -73,6 +75,7 @@ osmosisd tx wasm execute <CONTRACT_ADDR> '{
 ```
 
 **Notes:**
+
 - Attach funds equal to `token_in` (single) or the sum of `token_in_amount` for the given `token_in_denom` (split)
 - `token_out_min_amount` is honored as-is for slippage protection
 
@@ -102,21 +105,32 @@ cargo test
 
 ### Optimize for Production
 
-```bash
-# For x86_64
-cargo make optimize
-
-# For Apple Silicon (M1/M2)
-cargo make optimize-m1
-```
-
-Or manually:
+Recommended (Docker):
 
 ```bash
+# Intel/x86_64 hosts
 docker run --rm -v "$(pwd)":/code \
   --mount type=volume,source="$(basename "$(pwd)")_cache",target=/code/target \
   --mount type=volume,source=registry_cache,target=/usr/local/cargo/registry \
-  cosmwasm/rust-optimizer:0.16.0
+  cosmwasm/rust-optimizer:0.17.0
+
+# Apple Silicon (M1/M2)
+docker run --rm -v "$(pwd)":/code \
+  --mount type=volume,source="$(basename "$(pwd)")_cache",target=/code/target \
+  --mount type=volume,source=registry_cache,target=/usr/local/cargo/registry \
+  cosmwasm/rust-optimizer-arm64:0.17.0
+```
+
+Optional (Cargo aliases):
+
+```bash
+cargo install cargo-run-script
+
+# Intel/x86_64
+cargo optimize
+
+# Apple Silicon
+cargo optimize-m1
 ```
 
 ### Schema Generation
@@ -127,12 +141,10 @@ cargo run --bin build-schema
 
 ## Deployment
 
-1. Build optimized wasm:
-   ```bash
-   cargo make optimize
-   ```
+1. Build optimized wasm (see Optimize for Production above). The artifact will be at `artifacts/affiliate_swap.wasm`.
 
 2. Upload to Osmosis:
+
    ```bash
    osmosisd tx wasm store artifacts/affiliate_swap.wasm --from <key> --gas-prices 0.025uosmo --gas auto --gas-adjustment 1.5
    ```
