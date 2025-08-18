@@ -1,71 +1,156 @@
-# Osmosis CosmWasm Contracts
+# Osmosis Affiliate Swap Contract
 
-This repository contains CosmWasm smart contracts for the Osmosis ecosystem, extracted from the main [Osmosis repository](https://github.com/osmosis-labs/osmosis).
+A CosmWasm smart contract for Osmosis that enables affiliate fee collection on swaps. This contract routes swaps via Osmosis poolmanager and splits the output by an affiliate fee in basis points. The affiliate portion is sent to a configured Osmosis address and the remainder to the swap caller.
 
-## Contracts
+## Features
 
-### Affiliate Swap Contract
+- **Affiliate Fee Collection**: Configurable fee rates for partners and integrators
+- **Swap Routing**: Integration with Osmosis poolmanager for optimal swap execution
+- **Multiple Swap Types**: Support for both regular and split-route swaps
+- **Slippage Protection**: Honors user-defined minimum output amounts
+- **Secure**: Validates funds and uses stargate messages for reliable execution
 
-The affiliate swap contract enables fee collection on swaps through affiliate addresses. This allows partners and integrators to earn fees when users perform swaps through their interfaces.
+## Contract Interface
 
-**Key Features:**
+### Instantiate
 
-- Affiliate fee collection mechanism
-- Configurable fee rates
-- Integration with Osmosis swap router
-- Support for multiple token pairs
+Fields:
+- `owner`: admin address
+- `affiliate_addr`: osmosis address receiving fees  
+- `affiliate_bps`: fee in basis points (0-10000)
 
-### Swap Router Contract
+### Execute
 
-A general-purpose swap routing contract that can execute multi-hop swaps across different pools on Osmosis.
+**`ProxySwapWithFee { swap }`**
 
-### Cross-chain Contracts
+Accepts the exact swap payload you would have sent on-chain and proxies it:
+- `SwapExactAmountIn { routes, token_in, token_out_min_amount }`
+- `SplitRouteSwapExactAmountIn { routes, token_in_denom, token_out_min_amount }`
 
-Several contracts supporting cross-chain functionality:
+The contract overwrites the `sender` internally to the contract address, validates funds, dispatches the swap, and after success splits the token-out amount between affiliate and caller.
 
-- **Cross-chain Registry**: Manages cross-chain asset registry
-- **Cross-chain Swaps**: Facilitates swaps across different blockchains
-- **Outpost**: Manages remote chain interactions
+### Examples
+
+**Regular (single-route) swap:**
+
+```bash
+osmosisd tx wasm execute <CONTRACT_ADDR> '{
+  "proxy_swap_with_fee": {
+    "swap": {
+      "swap_exact_amount_in": {
+        "routes": [{"pool_id": 1, "token_out_denom": "uatom"}],
+        "token_in": {"denom": "uosmo", "amount": "1000000"},
+        "token_out_min_amount": "990000"
+      }
+    }
+  }
+}' --from <user> --amount 1000000uosmo --gas-prices 0.025uosmo --gas auto --gas-adjustment 1.5
+```
+
+**Split-route swap:**
+
+```bash
+osmosisd tx wasm execute <CONTRACT_ADDR> '{
+  "proxy_swap_with_fee": {
+    "swap": {
+      "split_route_swap_exact_amount_in": {
+        "routes": [
+          {
+            "token_in_amount": "600000",
+            "pools": [{"pool_id": 1, "token_out_denom": "uatom"}]
+          },
+          {
+            "token_in_amount": "400000", 
+            "pools": [{"pool_id": 151, "token_out_denom": "uatom"}]
+          }
+        ],
+        "token_in_denom": "uosmo",
+        "token_out_min_amount": "990000"
+      }
+    }
+  }
+}' --from <user> --amount 1000000uosmo --gas-prices 0.025uosmo --gas auto --gas-adjustment 1.5
+```
+
+**Notes:**
+- Attach funds equal to `token_in` (single) or the sum of `token_in_amount` for the given `token_in_denom` (split)
+- `token_out_min_amount` is honored as-is for slippage protection
+
+### Query
+
+**`Config {}`** → Returns owner, affiliate addr, affiliate bps
 
 ## Development
 
 ### Prerequisites
 
-- Rust 1.70+
+- Rust 1.65+
 - `wasm32-unknown-unknown` target
 - Docker (for optimization)
 
 ### Building
 
-Build all contracts:
-
 ```bash
 cargo build
 ```
 
-Build optimized contracts:
+### Testing
+
+```bash
+cargo test
+```
+
+### Optimize for Production
+
+```bash
+# For x86_64
+cargo make optimize
+
+# For Apple Silicon (M1/M2)
+cargo make optimize-m1
+```
+
+Or manually:
 
 ```bash
 docker run --rm -v "$(pwd)":/code \
   --mount type=volume,source="$(basename "$(pwd)")_cache",target=/code/target \
   --mount type=volume,source=registry_cache,target=/usr/local/cargo/registry \
-  cosmwasm/rust-optimizer:0.12.13
+  cosmwasm/rust-optimizer:0.16.0
 ```
 
-### Testing
-
-Run tests for all contracts:
+### Schema Generation
 
 ```bash
-cargo test
+cargo run --bin build-schema
 ```
 
-Run tests for a specific contract:
+## Deployment
 
-```bash
-cd contracts/affiliate-swap
-cargo test
-```
+1. Build optimized wasm:
+   ```bash
+   cargo make optimize
+   ```
+
+2. Upload to Osmosis:
+   ```bash
+   osmosisd tx wasm store artifacts/affiliate_swap.wasm --from <key> --gas-prices 0.025uosmo --gas auto --gas-adjustment 1.5
+   ```
+
+3. Instantiate with desired parameters:
+   ```bash
+   osmosisd tx wasm instantiate <code-id> '{
+     "owner": "osmo1...",
+     "affiliate_addr": "osmo1...",
+     "affiliate_bps": 100
+   }' --from <key> --label "affiliate-swap" --gas-prices 0.025uosmo --gas auto --gas-adjustment 1.5
+   ```
+
+## Technical Details
+
+- Uses stargate messages `MsgSwapExactAmountIn` and `MsgSplitRouteSwapExactAmountIn` under the hood
+- The contract must hold the input funds and forwards the output via bank sends after swap success
+- Extracted from the main [Osmosis repository](https://github.com/osmosis-labs/osmosis) for standalone development
 
 ## License
 
