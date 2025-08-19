@@ -175,7 +175,13 @@ pub fn handle_swap_reply(deps: DepsMut, msg: Reply) -> Result<Response, Contract
 
     let cfg = CONFIG.load(deps.storage)?;
 
-    let affiliate_amount = amount.multiply_ratio(cfg.affiliate_bps as u128, 10_000u128);
+    // Calculate affiliate fee and enforce a minimum fee of 1 unit when a non-zero fee
+    // rounds down to zero. This ensures we always charge some affiliate fee on swaps
+    // when affiliate_bps > 0 and there is a non-zero output amount.
+    let mut affiliate_amount = amount.multiply_ratio(cfg.affiliate_bps as u128, 10_000u128);
+    if cfg.affiliate_bps > 0 && affiliate_amount.is_zero() && !amount.is_zero() {
+        affiliate_amount = Uint128::one();
+    }
     let user_amount = amount.checked_sub(affiliate_amount).unwrap();
 
     let mut msgs: Vec<cosmwasm_std::CosmosMsg> = vec![];
