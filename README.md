@@ -1,10 +1,10 @@
 # Osmosis Affiliate Swap Contract
 
-A CosmWasm smart contract for Osmosis that enables affiliate fee collection on swaps. This contract routes swaps via Osmosis poolmanager and splits the output by an affiliate fee in basis points. The affiliate portion is sent to a configured Osmosis address and the remainder to the swap caller.
+A CosmWasm smart contract for Osmosis that enables affiliate fee collection on swaps. This contract routes swaps via Osmosis poolmanager and collects the affiliate fee from the input in basis points. The affiliate portion of the input is sent upfront to a configured Osmosis address, and the remaining input is used for the swap. The full swap output is then forwarded to the swap caller.
 
 ## Features
 
-- **Affiliate Fee Collection**: Configurable fee rates for partners and integrators
+- **Affiliate Fee Collection**: Configurable fee rates for partners and integrators, deducted from input
 - **Swap Routing**: Integration with Osmosis poolmanager for optimal swap execution
 - **Multiple Swap Types**: Support for both regular and split-route swaps
 - **Slippage Protection**: Honors user-defined minimum output amounts
@@ -29,7 +29,7 @@ Accepts the exact swap payload you would have sent on-chain and proxies it:
 - `SwapExactAmountIn { routes, token_in, token_out_min_amount }`
 - `SplitRouteSwapExactAmountIn { routes, token_in_denom, token_out_min_amount }`
 
-The contract overwrites the `sender` internally to the contract address, validates funds, dispatches the swap, and after success splits the token-out amount between affiliate and caller.
+The contract overwrites the `sender` internally to the contract address, validates funds, deducts the affiliate fee from the input and sends it to the affiliate address, then dispatches the swap with the remaining input. The entire token-out amount is forwarded to the caller.
 
 ### Examples
 
@@ -76,8 +76,9 @@ osmosisd tx wasm execute <CONTRACT_ADDR> '{
 
 **Notes:**
 
-- Attach funds equal to `token_in` (single) or the sum of `token_in_amount` for the given `token_in_denom` (split)
-- `token_out_min_amount` is honored as-is for slippage protection
+- **Attach funds equal to the full original input**: `token_in` (single) or the sum of `token_in_amount` for `token_in_denom` (split). The contract will send the affiliate cut upfront and swap the remainder.
+- **Minimum affiliate fee rounding**: If `affiliate_bps > 0` and the computed fee on input would round down to zero for a non-zero input, the contract charges a minimum of 1 unit of the input denom. If this minimum fee fully consumes the input, the swap is skipped and only the affiliate transfer occurs.
+- `token_out_min_amount` is honored on the remaining input as-is for slippage protection.
 
 ### Query
 

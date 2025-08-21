@@ -77,10 +77,34 @@ pub fn proxy_swap_with_fee(
             {
                 return Err(ContractError::InsufficientFunds {});
             }
+            // Deduct affiliate amount from input and send upfront
+            let cfg = CONFIG.load(deps.storage)?;
+            let mut affiliate_in = token_in
+                .amount
+                .multiply_ratio(cfg.affiliate_bps as u128, 10_000u128);
+            if cfg.affiliate_bps > 0 && affiliate_in.is_zero() && !token_in.amount.is_zero() {
+                affiliate_in = Uint128::one();
+            }
+            let remaining_in = token_in.amount.checked_sub(affiliate_in).unwrap();
+
+            let mut resp = Response::new().add_attribute("action", "proxy_swap_with_fee");
+            if !affiliate_in.is_zero() {
+                resp = resp.add_message(cosmwasm_std::CosmosMsg::Bank(BankMsg::Send {
+                    to_address: cfg.affiliate_addr.into_string(),
+                    amount: coins(affiliate_in.u128(), token_in.denom.clone()),
+                }));
+            }
+
+            // If nothing remains to swap, we are done
+            if remaining_in.is_zero() {
+                return Ok(resp);
+            }
+
+            let adjusted_token_in = cosmwasm_std::Coin::new(remaining_in.u128(), token_in.denom);
             let msg = MsgSwapExactAmountIn {
                 sender: env.contract.address.into_string(),
                 routes: routes.clone(),
-                token_in: Some(token_in.clone().into()),
+                token_in: Some(adjusted_token_in.into()),
                 token_out_min_amount: token_out_min_amount.to_string(),
             };
             let out_denom = routes
@@ -97,9 +121,7 @@ pub fn proxy_swap_with_fee(
                 },
             )?;
 
-            Ok(Response::new()
-                .add_attribute("action", "proxy_swap_with_fee")
-                .add_submessage(SubMsg::reply_on_success(msg, SWAP_REPLY_ID)))
+            Ok(resp.add_submessage(SubMsg::reply_on_success(msg, SWAP_REPLY_ID)))
         }
         ProxySwap::SplitRouteSwapExactAmountIn {
             routes,
@@ -121,10 +143,49 @@ pub fn proxy_swap_with_fee(
             {
                 return Err(ContractError::InsufficientFunds {});
             }
+            // Deduct affiliate amount from input and send upfront
+            let cfg = CONFIG.load(deps.storage)?;
+            let mut affiliate_in = total_in.multiply_ratio(cfg.affiliate_bps as u128, 10_000u128);
+            if cfg.affiliate_bps > 0 && affiliate_in.is_zero() && !total_in.is_zero() {
+                affiliate_in = Uint128::one();
+            }
+            let remaining_in = total_in.checked_sub(affiliate_in).unwrap();
+
+            let mut resp = Response::new().add_attribute("action", "proxy_split_swap_with_fee");
+            if !affiliate_in.is_zero() {
+                resp = resp.add_message(cosmwasm_std::CosmosMsg::Bank(BankMsg::Send {
+                    to_address: cfg.affiliate_addr.into_string(),
+                    amount: coins(affiliate_in.u128(), token_in_denom.clone()),
+                }));
+            }
+
+            // If nothing remains to swap, we are done
+            if remaining_in.is_zero() {
+                return Ok(resp);
+            }
+
+            // Proportionally adjust each route's input so total equals remaining_in
+            let mut adjusted_routes = Vec::with_capacity(routes.len());
+            let mut accumulated = Uint128::zero();
+            for (i, r) in routes.iter().enumerate() {
+                let ai = Uint128::from_str(&r.token_in_amount)?;
+                let mut bi = ai.multiply_ratio(remaining_in.u128(), total_in.u128());
+                if i + 1 == routes.len() {
+                    // Assign any rounding remainder to the last route
+                    let so_far = accumulated + bi;
+                    if so_far < remaining_in {
+                        bi = bi + (remaining_in - so_far);
+                    }
+                }
+                accumulated = accumulated + bi;
+                let mut new_route = r.clone();
+                new_route.token_in_amount = bi.to_string();
+                adjusted_routes.push(new_route);
+            }
 
             let msg = MsgSplitRouteSwapExactAmountIn {
                 sender: env.contract.address.into_string(),
-                routes: routes.clone(),
+                routes: adjusted_routes,
                 token_in_denom: token_in_denom,
                 token_out_min_amount: token_out_min_amount.to_string(),
             };
@@ -143,9 +204,7 @@ pub fn proxy_swap_with_fee(
                 },
             )?;
 
-            Ok(Response::new()
-                .add_attribute("action", "proxy_split_swap_with_fee")
-                .add_submessage(SubMsg::reply_on_success(msg, SWAP_REPLY_ID)))
+            Ok(resp.add_submessage(SubMsg::reply_on_success(msg, SWAP_REPLY_ID)))
         }
     }
 }
@@ -173,41 +232,24 @@ pub fn handle_swap_reply(deps: DepsMut, msg: Reply) -> Result<Response, Contract
         });
     };
 
-    let cfg = CONFIG.load(deps.storage)?;
-
-    // Calculate affiliate fee and enforce a minimum fee of 1 unit when a non-zero fee
-    // rounds down to zero. This ensures we always charge some affiliate fee on swaps
-    // when affiliate_bps > 0 and there is a non-zero output amount.
-    let mut affiliate_amount = amount.multiply_ratio(cfg.affiliate_bps as u128, 10_000u128);
-    if cfg.affiliate_bps > 0 && affiliate_amount.is_zero() && !amount.is_zero() {
-        affiliate_amount = Uint128::one();
-    }
-    let user_amount = amount.checked_sub(affiliate_amount).unwrap();
-
+    // Affiliate was taken from input; send entire output to user
     let mut msgs: Vec<cosmwasm_std::CosmosMsg> = vec![];
-    if !affiliate_amount.is_zero() {
-        msgs.push(cosmwasm_std::CosmosMsg::Bank(BankMsg::Send {
-            to_address: cfg.affiliate_addr.into_string(),
-            amount: coins(affiliate_amount.u128(), state.token_out_denom.clone()),
-        }));
-    }
-    if !user_amount.is_zero() {
+    if !amount.is_zero() {
         msgs.push(cosmwasm_std::CosmosMsg::Bank(BankMsg::Send {
             to_address: state.original_sender.to_string(),
-            amount: coins(user_amount.u128(), state.token_out_denom.clone()),
+            amount: coins(amount.u128(), state.token_out_denom.clone()),
         }));
     }
 
     let response = SwapResponse {
         original_sender: state.original_sender.into_string(),
         token_out_denom: state.token_out_denom,
-        amount_sent_to_user: user_amount,
-        amount_sent_to_affiliate: affiliate_amount,
+        amount_sent_to_user: amount,
+        amount_sent_to_affiliate: Uint128::zero(),
     };
 
     Ok(Response::new()
         .add_messages(msgs)
         .set_data(cosmwasm_std::to_json_binary(&response)?)
-        .add_attribute("token_out_amount", amount)
-        .add_attribute("affiliate_bps", cfg.affiliate_bps.to_string()))
+        .add_attribute("token_out_amount", amount))
 }

@@ -51,8 +51,8 @@ fn test_proxy_single() {
     };
     let info = mock_info("trader", &[Coin::new(1000, "uion")]);
     let resp = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
-    assert_eq!(resp.messages.len(), 1);
-    assert_eq!(resp.messages[0].id, SWAP_REPLY_ID);
+    assert_eq!(resp.messages.len(), 2);
+    assert_eq!(resp.messages[1].id, SWAP_REPLY_ID);
 
     let resp_msg = MsgSwapExactAmountInResponse {
         token_out_amount: "1000".to_string(),
@@ -67,7 +67,7 @@ fn test_proxy_single() {
         }),
     };
     let resp = reply(deps.as_mut(), mock_env(), reply_msg).unwrap();
-    assert_eq!(resp.messages.len(), 2);
+    assert_eq!(resp.messages.len(), 1);
 }
 
 #[test]
@@ -91,8 +91,8 @@ fn test_proxy_split() {
     };
     let info = mock_info("trader", &[Coin::new(1000, "uion")]);
     let resp = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
-    assert_eq!(resp.messages.len(), 1);
-    assert_eq!(resp.messages[0].id, SWAP_REPLY_ID);
+    assert_eq!(resp.messages.len(), 2);
+    assert_eq!(resp.messages[1].id, SWAP_REPLY_ID);
 
     let resp_msg = MsgSplitRouteSwapExactAmountInResponse {
         token_out_amount: "1000".to_string(),
@@ -107,7 +107,7 @@ fn test_proxy_split() {
         }),
     };
     let resp = reply(deps.as_mut(), mock_env(), reply_msg).unwrap();
-    assert_eq!(resp.messages.len(), 2);
+    assert_eq!(resp.messages.len(), 1);
 }
 
 #[test]
@@ -136,28 +136,7 @@ fn test_min_affiliate_fee_applied_when_rounded_down_single() {
     let info = mock_info("trader", &[Coin::new(1, "uion")]);
     let resp = execute(deps.as_mut(), mock_env(), info, exec_msg).unwrap();
     assert_eq!(resp.messages.len(), 1);
-    assert_eq!(resp.messages[0].id, SWAP_REPLY_ID);
-
-    // Simulate a swap reply with token_out_amount = 1
-    let resp_msg = MsgSwapExactAmountInResponse {
-        token_out_amount: "1".to_string(),
-    };
-    let mut data = Vec::new();
-    prost::Message::encode(&resp_msg, &mut data).unwrap();
-    let reply_msg = cosmwasm_std::Reply {
-        id: SWAP_REPLY_ID,
-        result: cosmwasm_std::SubMsgResult::Ok(cosmwasm_std::SubMsgResponse {
-            data: Some(cosmwasm_std::Binary::from(data)),
-            events: vec![],
-        }),
-    };
-    let resp = reply(deps.as_mut(), mock_env(), reply_msg).unwrap();
-
-    // Expect 2 bank sends: 1 to affiliate for 1 unit (min), 0 to user? No, user gets 0,
-    // but zero-amount sends are omitted, so only 1 message should be present if user amount is zero.
-    // However, current implementation pushes a message only for non-zero amounts.
-    // With amount=1 and min fee=1, user_amount=0 => expect exactly 1 message.
-    assert_eq!(resp.messages.len(), 1);
+    assert_eq!(resp.messages[0].id, 0);
 }
 
 #[test]
@@ -188,24 +167,7 @@ fn test_min_affiliate_fee_applied_when_rounded_down_split() {
     };
     let info = mock_info("trader", &[Coin::new(1, "uion")]);
     let resp = execute(deps.as_mut(), mock_env(), info, exec_msg).unwrap();
+    // With input-based fee, the min fee (1) fully consumes input. No swap occurs.
     assert_eq!(resp.messages.len(), 1);
-    assert_eq!(resp.messages[0].id, SWAP_REPLY_ID);
-
-    // Simulate a swap reply with token_out_amount = 1
-    let resp_msg = MsgSplitRouteSwapExactAmountInResponse {
-        token_out_amount: "1".to_string(),
-    };
-    let mut data = Vec::new();
-    prost::Message::encode(&resp_msg, &mut data).unwrap();
-    let reply_msg = cosmwasm_std::Reply {
-        id: SWAP_REPLY_ID,
-        result: cosmwasm_std::SubMsgResult::Ok(cosmwasm_std::SubMsgResponse {
-            data: Some(cosmwasm_std::Binary::from(data)),
-            events: vec![],
-        }),
-    };
-    let resp = reply(deps.as_mut(), mock_env(), reply_msg).unwrap();
-
-    // With amount=1 and min fee=1, user_amount=0, so only 1 message sent to affiliate
-    assert_eq!(resp.messages.len(), 1);
+    assert_eq!(resp.messages[0].id, 0);
 }
