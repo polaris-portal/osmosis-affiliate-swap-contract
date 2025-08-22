@@ -69,26 +69,22 @@ pub fn proxy_swap_with_fee(
             token_in,
             token_out_min_amount,
         } => {
-            // validate funds exactly equals token_in
-            if !info
+            // validate funds are at least token_in
+            let gross_in: Uint128 = info
                 .funds
                 .iter()
-                .any(|c| c.denom == token_in.denom && c.amount == token_in.amount)
-            {
+                .filter(|c| c.denom == token_in.denom)
+                .fold(Uint128::zero(), |acc, c| acc + c.amount);
+            if gross_in < token_in.amount {
                 return Err(ContractError::InsufficientFunds {});
             }
-            // Deduct affiliate amount from input and send upfront
-            let cfg = CONFIG.load(deps.storage)?;
-            let mut affiliate_in = token_in
-                .amount
-                .multiply_ratio(cfg.affiliate_bps as u128, 10_000u128);
-            if cfg.affiliate_bps > 0 && affiliate_in.is_zero() && !token_in.amount.is_zero() {
-                affiliate_in = Uint128::one();
-            }
-            let remaining_in = token_in.amount.checked_sub(affiliate_in).unwrap();
+
+            // Compute affiliate as the difference between gross funds and provided net token_in
+            let affiliate_in = gross_in.checked_sub(token_in.amount).unwrap();
 
             let mut resp = Response::new().add_attribute("action", "proxy_swap_with_fee");
             if !affiliate_in.is_zero() {
+                let cfg = CONFIG.load(deps.storage)?;
                 resp = resp.add_message(cosmwasm_std::CosmosMsg::Bank(BankMsg::Send {
                     to_address: cfg.affiliate_addr.into_string(),
                     amount: coins(affiliate_in.u128(), token_in.denom.clone()),
@@ -96,15 +92,14 @@ pub fn proxy_swap_with_fee(
             }
 
             // If nothing remains to swap, we are done
-            if remaining_in.is_zero() {
+            if token_in.amount.is_zero() {
                 return Ok(resp);
             }
 
-            let adjusted_token_in = cosmwasm_std::Coin::new(remaining_in.u128(), token_in.denom);
             let msg = MsgSwapExactAmountIn {
                 sender: env.contract.address.into_string(),
                 routes: routes.clone(),
-                token_in: Some(adjusted_token_in.into()),
+                token_in: Some(token_in.into()),
                 token_out_min_amount: token_out_min_amount.to_string(),
             };
             let out_denom = routes
@@ -136,23 +131,22 @@ pub fn proxy_swap_with_fee(
                     .checked_add(amt)
                     .map_err(|e| cosmwasm_std::StdError::generic_err(e.to_string()))?;
             }
-            if !info
+            // validate funds are at least total_in
+            let gross_in: Uint128 = info
                 .funds
                 .iter()
-                .any(|c| c.denom == token_in_denom && c.amount == total_in)
-            {
+                .filter(|c| c.denom == token_in_denom)
+                .fold(Uint128::zero(), |acc, c| acc + c.amount);
+            if gross_in < total_in {
                 return Err(ContractError::InsufficientFunds {});
             }
-            // Deduct affiliate amount from input and send upfront
-            let cfg = CONFIG.load(deps.storage)?;
-            let mut affiliate_in = total_in.multiply_ratio(cfg.affiliate_bps as u128, 10_000u128);
-            if cfg.affiliate_bps > 0 && affiliate_in.is_zero() && !total_in.is_zero() {
-                affiliate_in = Uint128::one();
-            }
-            let remaining_in = total_in.checked_sub(affiliate_in).unwrap();
+
+            // Compute affiliate as the difference between gross funds and provided net total_in
+            let affiliate_in = gross_in.checked_sub(total_in).unwrap();
 
             let mut resp = Response::new().add_attribute("action", "proxy_split_swap_with_fee");
             if !affiliate_in.is_zero() {
+                let cfg = CONFIG.load(deps.storage)?;
                 resp = resp.add_message(cosmwasm_std::CosmosMsg::Bank(BankMsg::Send {
                     to_address: cfg.affiliate_addr.into_string(),
                     amount: coins(affiliate_in.u128(), token_in_denom.clone()),
@@ -160,32 +154,13 @@ pub fn proxy_swap_with_fee(
             }
 
             // If nothing remains to swap, we are done
-            if remaining_in.is_zero() {
+            if total_in.is_zero() {
                 return Ok(resp);
-            }
-
-            // Proportionally adjust each route's input so total equals remaining_in
-            let mut adjusted_routes = Vec::with_capacity(routes.len());
-            let mut accumulated = Uint128::zero();
-            for (i, r) in routes.iter().enumerate() {
-                let ai = Uint128::from_str(&r.token_in_amount)?;
-                let mut bi = ai.multiply_ratio(remaining_in.u128(), total_in.u128());
-                if i + 1 == routes.len() {
-                    // Assign any rounding remainder to the last route
-                    let so_far = accumulated + bi;
-                    if so_far < remaining_in {
-                        bi = bi + (remaining_in - so_far);
-                    }
-                }
-                accumulated = accumulated + bi;
-                let mut new_route = r.clone();
-                new_route.token_in_amount = bi.to_string();
-                adjusted_routes.push(new_route);
             }
 
             let msg = MsgSplitRouteSwapExactAmountIn {
                 sender: env.contract.address.into_string(),
-                routes: adjusted_routes,
+                routes: routes.clone(),
                 token_in_denom: token_in_denom,
                 token_out_min_amount: token_out_min_amount.to_string(),
             };
